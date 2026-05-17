@@ -1,0 +1,1 @@
+"""Entrypoint: aiogram polling + APScheduler."""
