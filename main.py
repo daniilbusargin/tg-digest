@@ -11,6 +11,8 @@ load_dotenv()
 
 from aiogram import Bot  # noqa: E402
 from aiogram.types import Message  # noqa: E402
+from apscheduler.schedulers.asyncio import AsyncIOScheduler  # noqa: E402
+from apscheduler.triggers.cron import CronTrigger  # noqa: E402
 
 from bot import OWNER_CHAT_ID, build_bot, set_digest_runner  # noqa: E402
 from db import init_db  # noqa: E402
@@ -73,6 +75,32 @@ async def execute_digest(bot: Bot, reply_to: Message | None = None) -> None:
         await bot.send_message(OWNER_CHAT_ID, err_text)
 
 
+def _build_scheduler(bot: Bot) -> AsyncIOScheduler:
+    tz = os.getenv("SCHEDULE_TZ", "Europe/Moscow")
+    hour = int(os.getenv("SCHEDULE_HOUR", "9"))
+    minute = int(os.getenv("SCHEDULE_MINUTE", "0"))
+
+    scheduler = AsyncIOScheduler(timezone=tz)
+
+    async def _job() -> None:
+        log.info("scheduled digest started")
+        try:
+            await execute_digest(bot)
+        except Exception:
+            log.exception("scheduled digest failed")
+
+    scheduler.add_job(
+        _job,
+        trigger=CronTrigger(hour=hour, minute=minute, timezone=tz),
+        id="daily-digest",
+        replace_existing=True,
+        misfire_grace_time=3600,
+        coalesce=True,
+    )
+    log.info("Scheduler: daily-digest at %02d:%02d %s", hour, minute, tz)
+    return scheduler
+
+
 async def amain() -> None:
     await init_db()
     bot, dp = build_bot()
@@ -82,10 +110,14 @@ async def amain() -> None:
 
     set_digest_runner(_runner)
 
+    scheduler = _build_scheduler(bot)
+    scheduler.start()
+
     log.info("Bot is starting (polling)…")
     try:
         await dp.start_polling(bot)
     finally:
+        scheduler.shutdown(wait=False)
         await bot.session.close()
 
 
